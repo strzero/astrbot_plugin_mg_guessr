@@ -1,3 +1,4 @@
+import csv
 import json
 import hashlib
 import httpx
@@ -8,7 +9,7 @@ from astrbot.api import logger
 
 # 数据库文件路径
 db_path = '/AstrBot/data/songs_db.json'
-
+alias_csv_url = "https://aya.yurisaki.top/fs/export/yrsk_arcaea_alias_1744887235.csv"
 
 # 从 URL 获取 JSON 数据
 async def fetch_song_data(url):
@@ -25,16 +26,37 @@ async def fetch_song_data(url):
         logger.error(f"响应内容不是有效的 JSON 格式: {e}")  # 记录 JSON 解析错误
     return None  # 返回 None 表示失败
 
+# 从 CSV 获取别名数据
+async def fetch_aliases():
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(alias_csv_url)
+            response.raise_for_status()
+            csv_content = response.text
+            # 解析 CSV 数据
+            aliases = []
+            reader = csv.reader(csv_content.splitlines(), delimiter=',')
+            for row in reader:
+                if len(row) > 3:
+                    song_id = row[1]
+                    alias = row[3]
+                    aliases.append((song_id, alias))
+            return aliases
+    except httpx.RequestError as e:
+        logger.error(f"获取别名数据失败: {e}")
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP 错误: {e}")
+    except Exception as e:
+        logger.error(f"解析 CSV 文件时发生错误: {e}")
+    return []
 
 # 计算 JSON 数据的哈希值
 def calculate_hash(data):
-    # 将数据转换为 JSON 字符串后计算哈希值
     json_str = json.dumps(data, sort_keys=True)
     return hashlib.sha256(json_str.encode('utf-8')).hexdigest()
 
-
 # 存储数据到数据库
-def store_data_in_db(data):
+def store_data_in_db(data, aliases):
     if not data:
         logger.error("没有有效的曲目信息，跳过存储。")
         return
@@ -42,9 +64,10 @@ def store_data_in_db(data):
     # 创建数据库实例
     db = TinyDB(db_path)
 
-    # 获取 info 表和 arc_data 表
+    # 获取 info 表、arc_data 表和 alias 表
     info_table = db.table('info')
     arc_data_table = db.table('arc_data')
+    alias_table = db.table('aliases')
 
     # 获取当前数据的哈希值
     current_hash = calculate_hash(data)
@@ -52,13 +75,14 @@ def store_data_in_db(data):
     # 查找 info 表中的哈希值
     info = info_table.all()
     if info and info[0].get('hash') == current_hash:
-        print("数据未变化，跳过执行。")
+        logger.info("数据未变化，跳过执行。")
         db.close()
         return
 
-    # 如果哈希值不同或数据库为空，清空 arc_data 表并存储新数据
-    print("数据变化，正在清空 arc_data 表并存储新数据...")
-    arc_data_table.truncate()  # 清空 arc_data 表
+    # 清空 arc_data 表并存储新数据
+    logger.info("数据变化，正在清空 arc_data 表并存储新数据...")
+    arc_data_table.truncate()
+    alias_table.truncate()
 
     # 获取曲目难度的函数：考虑ratingPlus
     def get_rating(diff):
@@ -89,34 +113,36 @@ def store_data_in_db(data):
                         for diff in song.get('difficulties', [])
                     ]
                 ),
-                'FTR谱师': next((diff.get('chartDesigner', '') for diff in song.get('difficulties', []) if
-                                 diff.get('ratingClass') == 2), ''),
+                'FTR谱师': next((diff.get('chartDesigner', '') for diff in song.get('difficulties', []) if diff.get('ratingClass') == 2), ''),
                 '侧': '光芒侧' if song.get('side') == 0 else
-                '纷争侧' if song.get('side') == 1 else
-                '消色之侧' if song.get('side') == 2 else
-                'Lephon侧',
+                      '纷争侧' if song.get('side') == 1 else
+                      '消色之侧' if song.get('side') == 2 else
+                      'Lephon侧',
                 '背景': song.get('bg', ''),
                 '版本': song.get('version', ''),
-                'FTR难度': next(
-                    (get_rating(diff) for diff in song.get('difficulties', []) if diff.get('ratingClass') == 2), ''),
-                'BYD难度': next(
-                    (get_rating(diff) for diff in song.get('difficulties', []) if diff.get('ratingClass') == 3), ''),
-                'ETR难度': next(
-                    (get_rating(diff) for diff in song.get('difficulties', []) if diff.get('ratingClass') == 4), '')
+                'FTR难度': next((get_rating(diff) for diff in song.get('difficulties', []) if diff.get('ratingClass') == 2), ''),
+                'BYD难度': next((get_rating(diff) for diff in song.get('difficulties', []) if diff.get('ratingClass') == 3), ''),
+                'ETR难度': next((get_rating(diff) for diff in song.get('difficulties', []) if diff.get('ratingClass') == 4), '')
             }
             arc_data_table.insert(song_data)
+
+            # 插入别名数据到 alias 表
+            song_id = song['title_localized'].get('en', '')
+            for alias in aliases:
+                if alias[0] == song_id:
+                    alias_table.insert({'id': song_id, '别名': alias[1]})
+
         except Exception as e:
             # 如果某个曲目出错，打印错误信息并跳过该曲目
             logger.error(f"处理曲目 {song.get('title_localized', {}).get('en', '未知')} 时发生错误: {e}")
             continue
 
     # 更新 info 表中的哈希值
-    info_table.truncate()  # 清空 info 表
+    info_table.truncate()
     info_table.insert({'hash': current_hash})
 
     # 关闭数据库
     db.close()
-
 
 @register("mg-guessr", "Star0", "mg-guessr-extention", "1.0.0")
 class MyPlugin(Star):
@@ -130,8 +156,11 @@ class MyPlugin(Star):
         song_data = await fetch_song_data(url)
 
         if song_data:
+            # 获取别名数据
+            aliases = await fetch_aliases()
+
             # 存储数据到数据库
-            store_data_in_db(song_data)
+            store_data_in_db(song_data, aliases)
             logger.info("数据初始化并存储成功。")
         else:
             logger.error("无法获取有效的曲目信息，初始化失败。")
