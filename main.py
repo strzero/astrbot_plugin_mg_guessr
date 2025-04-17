@@ -7,7 +7,7 @@ from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 
 # 数据库文件路径
-db_path = 'songs_db.json'
+db_path = '/AstrBot/data/songs_db.json'
 
 
 # 从 URL 获取 JSON 数据
