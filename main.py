@@ -1,6 +1,6 @@
 import json
 import hashlib
-import requests
+import httpx
 from tinydb import TinyDB, Query
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
@@ -12,8 +12,18 @@ db_path = '/AstrBot/data/songs_db.json'
 
 # 从 URL 获取 JSON 数据
 async def fetch_song_data(url):
-    response = await requests.get(url)  # 异步请求
-    return response.json()
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url)  # 异步请求
+            response.raise_for_status()  # 如果返回的状态码不是2xx，会抛出异常
+            return response.json()  # 尝试将响应解析为 JSON
+    except httpx.RequestError as e:
+        logger.error(f"获取远程数据失败: {e}")  # 记录请求失败的错误
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP 错误: {e}")  # 记录 HTTP 错误
+    except ValueError as e:
+        logger.error(f"响应内容不是有效的 JSON 格式: {e}")  # 记录 JSON 解析错误
+    return None  # 返回 None 表示失败
 
 
 # 计算 JSON 数据的哈希值
@@ -25,6 +35,10 @@ def calculate_hash(data):
 
 # 存储数据到数据库
 def store_data_in_db(data):
+    if not data:
+        logger.error("没有有效的曲目信息，跳过存储。")
+        return
+
     # 创建数据库实例
     db = TinyDB(db_path)
 
@@ -48,7 +62,7 @@ def store_data_in_db(data):
 
     # 获取曲目难度的函数：考虑ratingPlus
     def get_rating(diff):
-        rating = diff['rating']
+        rating = diff.get('rating', 0)
         # 检查是否存在 ratingPlus 且为 True，若是，则加上 "+"
         if 'ratingPlus' in diff and diff['ratingPlus'] is True:
             return f"{rating}+"
@@ -57,7 +71,7 @@ def store_data_in_db(data):
     # 解析每个曲目信息并插入到 arc_data 表
     for song in data.get('songs', []):
         try:
-            if 'title_localized' not in song:
+            if 'title_localized' not in song or not isinstance(song['title_localized'], dict):
                 continue
 
             song_data = {
@@ -67,28 +81,28 @@ def store_data_in_db(data):
                 '曲师': song['artist'],
                 '难度分级': ' '.join(
                     [
-                        "PST" if diff['ratingClass'] == 0 else
-                        "PRS" if diff['ratingClass'] == 1 else
-                        "FTR" if diff['ratingClass'] == 2 else
-                        "BYD" if diff['ratingClass'] == 3 else
-                        "ETR" if diff['ratingClass'] == 4 else ""
+                        "PST" if diff.get('ratingClass') == 0 else
+                        "PRS" if diff.get('ratingClass') == 1 else
+                        "FTR" if diff.get('ratingClass') == 2 else
+                        "BYD" if diff.get('ratingClass') == 3 else
+                        "ETR" if diff.get('ratingClass') == 4 else ""
                         for diff in song.get('difficulties', [])
                     ]
                 ),
-                'FTR谱师': next(
-                    (diff['chartDesigner'] for diff in song.get('difficulties', []) if diff['ratingClass'] == 2), ''),
-                '侧': '光芒侧' if song['side'] == 0 else
-                '纷争侧' if song['side'] == 1 else
-                '消色之侧' if song['side'] == 2 else
+                'FTR谱师': next((diff.get('chartDesigner', '') for diff in song.get('difficulties', []) if
+                                 diff.get('ratingClass') == 2), ''),
+                '侧': '光芒侧' if song.get('side') == 0 else
+                '纷争侧' if song.get('side') == 1 else
+                '消色之侧' if song.get('side') == 2 else
                 'Lephon侧',
-                '背景': song['bg'],
-                '版本': song['version'],
-                'FTR难度': next((get_rating(diff) for diff in song.get('difficulties', []) if diff['ratingClass'] == 2),
-                                ''),
-                'BYD难度': next((get_rating(diff) for diff in song.get('difficulties', []) if diff['ratingClass'] == 3),
-                                ''),
-                'ETR难度': next((get_rating(diff) for diff in song.get('difficulties', []) if diff['ratingClass'] == 4),
-                                '')
+                '背景': song.get('bg', ''),
+                '版本': song.get('version', ''),
+                'FTR难度': next(
+                    (get_rating(diff) for diff in song.get('difficulties', []) if diff.get('ratingClass') == 2), ''),
+                'BYD难度': next(
+                    (get_rating(diff) for diff in song.get('difficulties', []) if diff.get('ratingClass') == 3), ''),
+                'ETR难度': next(
+                    (get_rating(diff) for diff in song.get('difficulties', []) if diff.get('ratingClass') == 4), '')
             }
             arc_data_table.insert(song_data)
         except Exception as e:
@@ -115,9 +129,12 @@ class MyPlugin(Star):
         # 异步获取曲目信息
         song_data = await fetch_song_data(url)
 
-        # 存储数据到数据库
-        store_data_in_db(song_data)
-        logger.info("数据初始化并存储成功。")
+        if song_data:
+            # 存储数据到数据库
+            store_data_in_db(song_data)
+            logger.info("数据初始化并存储成功。")
+        else:
+            logger.error("无法获取有效的曲目信息，初始化失败。")
 
     @filter.command("mg")
     async def helloworld(self, event: AstrMessageEvent):
