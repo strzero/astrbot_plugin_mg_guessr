@@ -1,29 +1,27 @@
 import json
 import hashlib
-import aiohttp  # 使用异步的 aiohttp 替代 requests
+import requests
 from tinydb import TinyDB, Query
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 
-# 数据库文件路径修改为 /AstrBot/data/songs_db.json
+# 数据库文件路径
 db_path = '/AstrBot/data/songs_db.json'
 
-# 从新的 URL 获取 JSON 数据（使用 aiohttp 进行异步请求）
+
+# 从 URL 获取 JSON 数据
 async def fetch_song_data(url):
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as response:
-            if response.status == 200:
-                return await response.json()
-            else:
-                logger.error(f"请求失败，状态码: {response.status}")
-                return {}
+    response = await requests.get(url)  # 异步请求
+    return response.json()
+
 
 # 计算 JSON 数据的哈希值
 def calculate_hash(data):
     # 将数据转换为 JSON 字符串后计算哈希值
     json_str = json.dumps(data, sort_keys=True)
     return hashlib.sha256(json_str.encode('utf-8')).hexdigest()
+
 
 # 存储数据到数据库
 def store_data_in_db(data):
@@ -57,10 +55,10 @@ def store_data_in_db(data):
         return str(rating)
 
     # 解析每个曲目信息并插入到 arc_data 表
-    for song in data['parse']['wikitext']['*']:
-        # 解析后的 wikitext 是一段文本，里面包含了歌曲数据
-        # 你需要使用正则或者其他方法解析该文本并提取出歌曲信息
-        # 暂时这里只是示例，具体解析方式视返回的数据而定
+    for song in data['songs']:
+        if 'title_localized' not in song:
+            continue
+
         song_data = {
             '曲名': song['title_localized'].get('en', ''),
             '语言': ' '.join([lang for lang in song['title_localized'].keys()]),
@@ -78,9 +76,9 @@ def store_data_in_db(data):
             ),
             'FTR谱师': next((diff['chartDesigner'] for diff in song['difficulties'] if diff['ratingClass'] == 2), ''),
             '侧': '光芒侧' if song['side'] == 0 else
-                  '纷争侧' if song['side'] == 1 else
-                  '消色之侧' if song['side'] == 2 else
-                  'Lephon侧',
+            '纷争侧' if song['side'] == 1 else
+            '消色之侧' if song['side'] == 2 else
+            'Lephon侧',
             '背景': song['bg'],
             '版本': song['version'],
             'FTR难度': next((get_rating(diff) for diff in song['difficulties'] if diff['ratingClass'] == 2), ''),
@@ -96,6 +94,7 @@ def store_data_in_db(data):
     # 关闭数据库
     db.close()
 
+
 @register("mg-guessr", "Star0", "mg-guessr-extention", "1.0.0")
 class MyPlugin(Star):
     def __init__(self, context: Context):
@@ -103,15 +102,13 @@ class MyPlugin(Star):
 
     async def initialize(self):
         """插件初始化时会自动调用"""
-        try:
-            url = "https://arcwiki.mcd.blue/api.php?action=parse&page=Template:Songlist.json&prop=wikitext&format=json"
-            # 异步获取曲目信息
-            song_data = await fetch_song_data(url)
-            # 存储数据到数据库
-            store_data_in_db(song_data)
-            logger.info("数据初始化并存储成功。")
-        except Exception as e:
-            logger.error(f"初始化插件时发生错误: {e}")
+        url = "https://arcwiki.mcd.blue/index.php?title=Template:Songlist.json&action=raw"
+        # 异步获取曲目信息
+        song_data = await fetch_song_data(url)
+
+        # 存储数据到数据库
+        store_data_in_db(song_data)
+        logger.info("数据初始化并存储成功。")
 
     @filter.command("mg")
     async def helloworld(self, event: AstrMessageEvent):
