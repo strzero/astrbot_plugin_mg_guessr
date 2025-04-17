@@ -7,7 +7,7 @@ from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 
 # 数据库文件路径
-db_path = '/AstrBot/data/songs_db.json'
+db_path = 'songs_db.json'
 
 
 # 从 URL 获取 JSON 数据
@@ -55,37 +55,46 @@ def store_data_in_db(data):
         return str(rating)
 
     # 解析每个曲目信息并插入到 arc_data 表
-    for song in data['songs']:
-        if 'title_localized' not in song:
-            continue
+    for song in data.get('songs', []):
+        try:
+            if 'title_localized' not in song:
+                continue
 
-        song_data = {
-            '曲名': song['title_localized'].get('en', ''),
-            '语言': ' '.join([lang for lang in song['title_localized'].keys()]),
-            '曲包': song['set'],
-            '曲师': song['artist'],
-            '难度分级': ' '.join(
-                [
-                    "PST" if diff['ratingClass'] == 0 else
-                    "PRS" if diff['ratingClass'] == 1 else
-                    "FTR" if diff['ratingClass'] == 2 else
-                    "BYD" if diff['ratingClass'] == 3 else
-                    "ETR" if diff['ratingClass'] == 4 else ""
-                    for diff in song['difficulties']
-                ]
-            ),
-            'FTR谱师': next((diff['chartDesigner'] for diff in song['difficulties'] if diff['ratingClass'] == 2), ''),
-            '侧': '光芒侧' if song['side'] == 0 else
-            '纷争侧' if song['side'] == 1 else
-            '消色之侧' if song['side'] == 2 else
-            'Lephon侧',
-            '背景': song['bg'],
-            '版本': song['version'],
-            'FTR难度': next((get_rating(diff) for diff in song['difficulties'] if diff['ratingClass'] == 2), ''),
-            'BYD难度': next((get_rating(diff) for diff in song['difficulties'] if diff['ratingClass'] == 3), ''),
-            'ETR难度': next((get_rating(diff) for diff in song['difficulties'] if diff['ratingClass'] == 4), '')
-        }
-        arc_data_table.insert(song_data)
+            song_data = {
+                '曲名': song['title_localized'].get('en', ''),
+                '语言': ' '.join([lang for lang in song['title_localized'].keys()]),
+                '曲包': song['set'],
+                '曲师': song['artist'],
+                '难度分级': ' '.join(
+                    [
+                        "PST" if diff['ratingClass'] == 0 else
+                        "PRS" if diff['ratingClass'] == 1 else
+                        "FTR" if diff['ratingClass'] == 2 else
+                        "BYD" if diff['ratingClass'] == 3 else
+                        "ETR" if diff['ratingClass'] == 4 else ""
+                        for diff in song.get('difficulties', [])
+                    ]
+                ),
+                'FTR谱师': next(
+                    (diff['chartDesigner'] for diff in song.get('difficulties', []) if diff['ratingClass'] == 2), ''),
+                '侧': '光芒侧' if song['side'] == 0 else
+                '纷争侧' if song['side'] == 1 else
+                '消色之侧' if song['side'] == 2 else
+                'Lephon侧',
+                '背景': song['bg'],
+                '版本': song['version'],
+                'FTR难度': next((get_rating(diff) for diff in song.get('difficulties', []) if diff['ratingClass'] == 2),
+                                ''),
+                'BYD难度': next((get_rating(diff) for diff in song.get('difficulties', []) if diff['ratingClass'] == 3),
+                                ''),
+                'ETR难度': next((get_rating(diff) for diff in song.get('difficulties', []) if diff['ratingClass'] == 4),
+                                '')
+            }
+            arc_data_table.insert(song_data)
+        except Exception as e:
+            # 如果某个曲目出错，打印错误信息并跳过该曲目
+            logger.error(f"处理曲目 {song.get('title_localized', {}).get('en', '未知')} 时发生错误: {e}")
+            continue
 
     # 更新 info 表中的哈希值
     info_table.truncate()  # 清空 info 表
