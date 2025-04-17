@@ -11,6 +11,7 @@ from astrbot.api import logger
 db_path = '/AstrBot/data/songs_db.json'
 alias_csv_url = "https://aya.yurisaki.top/fs/export/yrsk_arcaea_alias_1744887235.csv"
 
+
 # 从 URL 获取 JSON 数据
 async def fetch_song_data(url):
     try:
@@ -25,6 +26,7 @@ async def fetch_song_data(url):
     except ValueError as e:
         logger.error(f"响应内容不是有效的 JSON 格式: {e}")  # 记录 JSON 解析错误
     return None  # 返回 None 表示失败
+
 
 # 从 CSV 获取别名数据
 async def fetch_aliases():
@@ -50,10 +52,12 @@ async def fetch_aliases():
         logger.error(f"解析 CSV 文件时发生错误: {e}")
     return []
 
+
 # 计算 JSON 数据的哈希值
 def calculate_hash(data):
     json_str = json.dumps(data, sort_keys=True)
     return hashlib.sha256(json_str.encode('utf-8')).hexdigest()
+
 
 # 存储数据到数据库
 def store_data_in_db(data, aliases):
@@ -95,6 +99,9 @@ def store_data_in_db(data, aliases):
     # 解析每个曲目信息并插入到 arc_data 表
     for song in data.get('songs', []):
         try:
+            # 获取曲目的 id
+            song_id = song['id']
+
             if 'title_localized' not in song or not isinstance(song['title_localized'], dict):
                 continue
 
@@ -113,24 +120,32 @@ def store_data_in_db(data, aliases):
                         for diff in song.get('difficulties', [])
                     ]
                 ),
-                'FTR谱师': next((diff.get('chartDesigner', '') for diff in song.get('difficulties', []) if diff.get('ratingClass') == 2), ''),
+                'FTR谱师': next((diff.get('chartDesigner', '') for diff in song.get('difficulties', []) if
+                                 diff.get('ratingClass') == 2), ''),
                 '侧': '光芒侧' if song.get('side') == 0 else
-                      '纷争侧' if song.get('side') == 1 else
-                      '消色之侧' if song.get('side') == 2 else
-                      'Lephon侧',
+                '纷争侧' if song.get('side') == 1 else
+                '消色之侧' if song.get('side') == 2 else
+                'Lephon侧',
                 '背景': song.get('bg', ''),
                 '版本': song.get('version', ''),
-                'FTR难度': next((get_rating(diff) for diff in song.get('difficulties', []) if diff.get('ratingClass') == 2), ''),
-                'BYD难度': next((get_rating(diff) for diff in song.get('difficulties', []) if diff.get('ratingClass') == 3), ''),
-                'ETR难度': next((get_rating(diff) for diff in song.get('difficulties', []) if diff.get('ratingClass') == 4), '')
+                'FTR难度': next(
+                    (get_rating(diff) for diff in song.get('difficulties', []) if diff.get('ratingClass') == 2), ''),
+                'BYD难度': next(
+                    (get_rating(diff) for diff in song.get('difficulties', []) if diff.get('ratingClass') == 3), ''),
+                'ETR难度': next(
+                    (get_rating(diff) for diff in song.get('difficulties', []) if diff.get('ratingClass') == 4), ''),
+                'id': song_id  # 添加曲目的 id
             }
             arc_data_table.insert(song_data)
 
-            # 插入别名数据到 alias 表
-            song_id = song['title_localized'].get('en', '')
+            # 存储别名到别名表
             for alias in aliases:
-                if alias[0] == song_id:
-                    alias_table.insert({'id': song_id, '别名': alias[1]})
+                song_alias, alias_name = alias
+                if song_alias == song_id:  # 匹配到曲目的 ID
+                    alias_table.insert({
+                        'id': song_alias,
+                        '别名': alias_name
+                    })
 
         except Exception as e:
             # 如果某个曲目出错，打印错误信息并跳过该曲目
@@ -138,11 +153,12 @@ def store_data_in_db(data, aliases):
             continue
 
     # 更新 info 表中的哈希值
-    info_table.truncate()
+    info_table.truncate()  # 清空 info 表
     info_table.insert({'hash': current_hash})
 
     # 关闭数据库
     db.close()
+
 
 @register("mg-guessr", "Star0", "mg-guessr-extention", "1.0.0")
 class MyPlugin(Star):
@@ -158,7 +174,6 @@ class MyPlugin(Star):
         if song_data:
             # 获取别名数据
             aliases = await fetch_aliases()
-
             # 存储数据到数据库
             store_data_in_db(song_data, aliases)
             logger.info("数据初始化并存储成功。")
