@@ -6,19 +6,18 @@ from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 
-# 数据库文件路径
+# 数据库文件路径修改为 /AstrBot/data/songs_db.json
 db_path = '/AstrBot/data/songs_db.json'
 
-# 从 URL 获取 JSON 数据（使用 aiohttp 进行异步请求）
+# 从新的 URL 获取 JSON 数据（使用 aiohttp 进行异步请求）
 async def fetch_song_data(url):
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as response:
-            # 强制将内容作为 JSON 进行解析，而不是依赖 MIME 类型
-            try:
-                return await response.json(content_type='application/json')  # 强制解析为 JSON
-            except Exception as e:
-                logger.error(f"请求解析失败，URL: {url}, 错误: {e}")
-                raise
+            if response.status == 200:
+                return await response.json()
+            else:
+                logger.error(f"请求失败，状态码: {response.status}")
+                return {}
 
 # 计算 JSON 数据的哈希值
 def calculate_hash(data):
@@ -58,10 +57,10 @@ def store_data_in_db(data):
         return str(rating)
 
     # 解析每个曲目信息并插入到 arc_data 表
-    for song in data['songs']:
-        if 'title_localized' not in song:
-            continue
-        
+    for song in data['parse']['wikitext']['*']:
+        # 解析后的 wikitext 是一段文本，里面包含了歌曲数据
+        # 你需要使用正则或者其他方法解析该文本并提取出歌曲信息
+        # 暂时这里只是示例，具体解析方式视返回的数据而定
         song_data = {
             '曲名': song['title_localized'].get('en', ''),
             '语言': ' '.join([lang for lang in song['title_localized'].keys()]),
@@ -105,7 +104,7 @@ class MyPlugin(Star):
     async def initialize(self):
         """插件初始化时会自动调用"""
         try:
-            url = "https://arcwiki.mcd.blue/index.php?title=Template:Songlist.json&action=raw"
+            url = "https://arcwiki.mcd.blue/api.php?action=parse&page=Template:Songlist.json&prop=wikitext&format=json"
             # 异步获取曲目信息
             song_data = await fetch_song_data(url)
             # 存储数据到数据库
