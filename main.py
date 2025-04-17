@@ -13,7 +13,12 @@ db_path = '/AstrBot/data/songs_db.json'
 async def fetch_song_data(url):
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as response:
-            return await response.json()
+            # 强制将内容作为 JSON 进行解析，而不是依赖 MIME 类型
+            try:
+                return await response.json(content_type='application/json')  # 强制解析为 JSON
+            except Exception as e:
+                logger.error(f"请求解析失败，URL: {url}, 错误: {e}")
+                raise
 
 # 计算 JSON 数据的哈希值
 def calculate_hash(data):
