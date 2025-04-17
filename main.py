@@ -7,11 +7,11 @@ from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 
 # 数据库文件路径
-db_path = '/AstrBot/data/songs_db.json'
+db_path = 'songs_db.json'
 
-# 从 URL 获取 JSON 数据
-async def fetch_song_data(url):
-    response = await requests.get(url)  # 异步请求
+# 从 URL 获取 JSON 数据（同步）
+def fetch_song_data(url):
+    response = requests.get(url)
     return response.json()
 
 # 计算 JSON 数据的哈希值
@@ -96,18 +96,18 @@ class MyPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
 
-    async def initialize(self):
+    def initialize(self):
         """插件初始化时会自动调用"""
         url = "https://arcwiki.mcd.blue/index.php?title=Template:Songlist.json&action=raw"
-        # 异步获取曲目信息
-        song_data = await fetch_song_data(url)
+        # 同步获取曲目信息
+        song_data = fetch_song_data(url)
         
         # 存储数据到数据库
         store_data_in_db(song_data)
         logger.info("数据初始化并存储成功。")
 
     @filter.command("mg")
-    async def helloworld(self, event: AstrMessageEvent):
+    def helloworld(self, event: AstrMessageEvent):
         """这是一个 hello world 指令"""
         user_name = event.get_sender_name()
         message_str = event.message_str
@@ -115,6 +115,6 @@ class MyPlugin(Star):
         logger.info(message_chain)
         yield event.plain_result(f"Hello, {user_name}, 你发了 {message_str}!")
 
-    async def terminate(self):
+    def terminate(self):
         """插件被卸载/停用时会调用"""
         pass
