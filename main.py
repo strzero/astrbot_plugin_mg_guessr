@@ -1,163 +1,160 @@
-import csv
-import json
-import hashlib
-import httpx
+import random
+import difflib
+from datetime import datetime
 from tinydb import TinyDB, Query
-from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
+from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 
-# 数据库文件路径
+# 数据库路径
 db_path = '/AstrBot/data/songs_db.json'
-alias_csv_url = "https://aya.yurisaki.top/fs/export/yrsk_arcaea_alias_1744887235.csv"
+
+# 游戏状态
+game_states = {}
 
 
-# 从 URL 获取 JSON 数据
-async def fetch_song_data(url):
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url)  # 异步请求
-            response.raise_for_status()  # 如果返回的状态码不是2xx，会抛出异常
-            return response.json()  # 尝试将响应解析为 JSON
-    except httpx.RequestError as e:
-        logger.error(f"获取远程数据失败: {e}")  # 记录请求失败的错误
-    except httpx.HTTPStatusError as e:
-        logger.error(f"HTTP 错误: {e}")  # 记录 HTTP 错误
-    except ValueError as e:
-        logger.error(f"响应内容不是有效的 JSON 格式: {e}")  # 记录 JSON 解析错误
-    return None  # 返回 None 表示失败
-
-
-# 从 CSV 获取别名数据
-async def fetch_aliases():
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(alias_csv_url)
-            response.raise_for_status()
-            csv_content = response.text
-            # 解析 CSV 数据
-            aliases = []
-            reader = csv.reader(csv_content.splitlines(), delimiter=',')
-            for row in reader:
-                if len(row) > 3:
-                    song_id = row[1]
-                    alias = row[3]
-                    aliases.append((song_id, alias))
-            return aliases
-    except httpx.RequestError as e:
-        logger.error(f"获取别名数据失败: {e}")
-    except httpx.HTTPStatusError as e:
-        logger.error(f"HTTP 错误: {e}")
-    except Exception as e:
-        logger.error(f"解析 CSV 文件时发生错误: {e}")
-    return []
-
-
-# 计算 JSON 数据的哈希值
-def calculate_hash(data):
-    json_str = json.dumps(data, sort_keys=True)
-    return hashlib.sha256(json_str.encode('utf-8')).hexdigest()
-
-
-# 存储数据到数据库
-def store_data_in_db(data, aliases):
-    if not data:
-        logger.error("没有有效的曲目信息，跳过存储。")
-        return
-
-    # 创建数据库实例
+# 获取别名表
+def get_alias_table():
     db = TinyDB(db_path)
-
-    # 获取 info 表、arc_data 表和 alias 表
-    info_table = db.table('info')
-    arc_data_table = db.table('arc_data')
     alias_table = db.table('aliases')
+    return alias_table
 
-    # 获取当前数据的哈希值
-    current_hash = calculate_hash(data)
 
-    # 查找 info 表中的哈希值
-    info = info_table.all()
-    if info and info[0].get('hash') == current_hash:
-        logger.info("数据未变化，跳过执行。")
-        db.close()
-        return
+# 获取歌曲库
+def get_song_data_table():
+    db = TinyDB(db_path)
+    arc_data_table = db.table('arc_data')
+    return arc_data_table
 
-    # 清空 arc_data 表并存储新数据
-    logger.info("数据变化，正在清空 arc_data 表并存储新数据...")
-    arc_data_table.truncate()
-    alias_table.truncate()
 
-    # 获取曲目难度的函数：考虑ratingPlus
-    def get_rating(diff):
-        rating = diff.get('rating', 0)
-        # 检查是否存在 ratingPlus 且为 True，若是，则加上 "+"
-        if 'ratingPlus' in diff and diff['ratingPlus'] is True:
-            return f"{rating}+"
-        return str(rating)
+# 获取历史排名
+def get_winner_table():
+    db = TinyDB(db_path)
+    winner_table = db.table('winners')
+    return winner_table
 
-    # 解析每个曲目信息并插入到 arc_data 表
-    for song in data.get('songs', []):
-        try:
-            # 获取曲目的 id
-            song_id = song['id']
 
-            if 'title_localized' not in song or not isinstance(song['title_localized'], dict):
-                continue
+# 启动猜歌游戏
+async def start_game(group_id, max_attempts=10):
+    song_data_table = get_song_data_table()
+    # 随机选择一个曲目作为谜底
+    song = random.choice(song_data_table.all())
+    game_states[group_id] = {
+        'mystery_song': song,
+        'attempts_left': max_attempts,
+        'guesses': [],
+        'start_time': datetime.now(),
+        'winner': None
+    }
+    logger.info(f"游戏已开始，谜底为：{song['曲名']}（ID: {song['id']}）。")
+    return song['曲名']
 
-            song_data = {
-                '曲名': song['title_localized'].get('en', ''),
-                '语言': ' '.join([lang for lang in song['title_localized'].keys()]),
-                '曲包': song['set'],
-                '曲师': song['artist'],
-                '难度分级': ' '.join(
-                    [
-                        "PST" if diff.get('ratingClass') == 0 else
-                        "PRS" if diff.get('ratingClass') == 1 else
-                        "FTR" if diff.get('ratingClass') == 2 else
-                        "BYD" if diff.get('ratingClass') == 3 else
-                        "ETR" if diff.get('ratingClass') == 4 else ""
-                        for diff in song.get('difficulties', [])
-                    ]
-                ),
-                'FTR谱师': next((diff.get('chartDesigner', '') for diff in song.get('difficulties', []) if
-                                 diff.get('ratingClass') == 2), ''),
-                '侧': '光芒侧' if song.get('side') == 0 else
-                '纷争侧' if song.get('side') == 1 else
-                '消色之侧' if song.get('side') == 2 else
-                'Lephon侧',
-                '背景': song.get('bg', ''),
-                '版本': song.get('version', ''),
-                'FTR难度': next(
-                    (get_rating(diff) for diff in song.get('difficulties', []) if diff.get('ratingClass') == 2), ''),
-                'BYD难度': next(
-                    (get_rating(diff) for diff in song.get('difficulties', []) if diff.get('ratingClass') == 3), ''),
-                'ETR难度': next(
-                    (get_rating(diff) for diff in song.get('difficulties', []) if diff.get('ratingClass') == 4), ''),
-                'id': song_id  # 添加曲目的 id
-            }
-            arc_data_table.insert(song_data)
 
-            # 存储别名到别名表
-            for alias in aliases:
-                song_alias, alias_name = alias
-                if song_alias == song_id:  # 匹配到曲目的 ID
-                    alias_table.insert({
-                        'id': song_alias,
-                        '别名': alias_name
-                    })
+# 停止猜歌游戏
+async def stop_game(group_id):
+    game_state = game_states.get(group_id)
+    if not game_state:
+        return "游戏未开始或已结束。"
 
-        except Exception as e:
-            # 如果某个曲目出错，打印错误信息并跳过该曲目
-            logger.error(f"处理曲目 {song.get('title_localized', {}).get('en', '未知')} 时发生错误: {e}")
-            continue
+    mystery_song = game_state['mystery_song']
+    del game_states[group_id]  # 清除游戏状态
+    return f"游戏结束，谜底是：{mystery_song['曲名']}（ID: {mystery_song['id']}）"
 
-    # 更新 info 表中的哈希值
-    info_table.truncate()  # 清空 info 表
-    info_table.insert({'hash': current_hash})
 
-    # 关闭数据库
-    db.close()
+# 进行猜歌
+async def make_guess(group_id, user_name, guess):
+    game_state = game_states.get(group_id)
+    if not game_state:
+        return "游戏未开始或已结束。"
+
+    mystery_song = game_state['mystery_song']
+    attempts_left = game_state['attempts_left']
+    guesses = game_state['guesses']
+
+    if attempts_left <= 0:
+        return "猜测次数已用完，游戏结束。"
+
+    # 从别名表查找
+    alias_table = get_alias_table()
+    alias_match = alias_table.search(Query().别名 == guess)
+
+    if alias_match:
+        song_id = alias_match[0]['id']
+        guess_song = next((song for song in get_song_data_table().all() if song['id'] == song_id), None)
+    else:
+        # 模糊匹配
+        song_data = get_song_data_table().all()
+        guess_song = difflib.get_close_matches(guess, [song['曲名'] for song in song_data], n=1)
+
+        if guess_song:
+            guess_song = next((song for song in song_data if song['曲名'] == guess_song[0]), None)
+        else:
+            guess_song = None
+
+    if not guess_song:
+        return "没有找到匹配的曲目，请尝试其他名称。"
+
+    # 记录猜测
+    game_state['attempts_left'] -= 1
+    game_state['guesses'].append({
+        'user': user_name,
+        'guess': guess,
+        'correct': guess_song['id'] == mystery_song['id'],
+        'time': datetime.now()
+    })
+
+    # 判断是否猜对
+    if guess_song['id'] == mystery_song['id']:
+        game_state['winner'] = user_name
+        # 记录历史胜利者
+        winner_table = get_winner_table()
+        winner_entry = winner_table.search(Query().user == user_name)
+        if winner_entry:
+            winner_table.update({'count': winner_entry[0]['count'] + 1}, Query().user == user_name)
+        else:
+            winner_table.insert({'user': user_name, 'count': 1})
+        return f"恭喜 {user_name} 猜对了！谜底是：{mystery_song['曲名']}"
+
+    # 提示猜错信息
+    comparison = []
+    for key in ['难度分级', 'FTR难度', '版本']:
+        if mystery_song[key] != guess_song[key]:
+            comparison.append(f"{key}: {guess_song[key]} ❌（谜底不是这个）")
+
+    # 返回与谜底的比较结果
+    return f"你猜的曲目与谜底不完全匹配，以下是与谜底的对比：\n" + "\n".join(comparison)
+
+
+# 获取线索
+async def get_tip(group_id):
+    game_state = game_states.get(group_id)
+    if not game_state:
+        return "游戏未开始或已结束。"
+
+    mystery_song = game_state['mystery_song']
+    known_info = []
+    for key in ['曲名', '难度分级', 'FTR难度', '版本']:
+        known_info.append(f"{key}: {mystery_song.get(key, '未知')}")
+    return "\n".join(known_info)
+
+
+# 获取排名
+async def get_rank():
+    winner_table = get_winner_table()
+    winners = sorted(winner_table.all(), key=lambda x: x['count'], reverse=True)[:10]
+    return "\n".join([f"{entry['user']}: {entry['count']} 次" for entry in winners])
+
+
+# 帮助信息
+async def help_info():
+    return """游戏指令:
+    /mg start [最大猜测次数] - 启动游戏，默认最大猜测次数为 10。
+    /mg stop - 停止游戏并公布谜底。
+    /mg [曲名] - 猜歌，猜对即获胜。
+    /mg tip - 获取当前已知线索。
+    /mg rank - 查看历史获胜排名前十的玩家。
+    /mg help - 查看帮助信息。
+    """
 
 
 @register("mg-guessr", "Star0", "mg-guessr-extention", "1.0.0")
@@ -167,28 +164,41 @@ class MyPlugin(Star):
 
     async def initialize(self):
         """插件初始化时会自动调用"""
-        url = "https://arcwiki.mcd.blue/index.php?title=Template:Songlist.json&action=raw"
-        # 异步获取曲目信息
-        song_data = await fetch_song_data(url)
+        pass
 
-        if song_data:
-            # 获取别名数据
-            aliases = await fetch_aliases()
-            # 存储数据到数据库
-            store_data_in_db(song_data, aliases)
-            logger.info("数据初始化并存储成功。")
-        else:
-            logger.error("无法获取有效的曲目信息，初始化失败。")
+    @filter.command("mg start")
+    async def start_game_cmd(self, event: AstrMessageEvent):
+        group_id = event.get_group_id()
+        max_attempts = int(event.message_str.split()[1]) if len(event.message_str.split()) > 1 else 10
+        mystery_song = await start_game(group_id, max_attempts)
+        return f"游戏已开始！谜底是：{mystery_song}"
+
+    @filter.command("mg stop")
+    async def stop_game_cmd(self, event: AstrMessageEvent):
+        group_id = event.get_group_id()
+        result = await stop_game(group_id)
+        return result
 
     @filter.command("mg")
-    async def helloworld(self, event: AstrMessageEvent):
-        """这是一个 hello world 指令"""
+    async def make_guess_cmd(self, event: AstrMessageEvent):
+        group_id = event.get_group_id()
         user_name = event.get_sender_name()
-        message_str = event.message_str
-        message_chain = event.get_messages()
-        logger.info(message_chain)
-        yield event.plain_result(f"Hello, {user_name}, 你发了 {message_str}!")
+        guess = event.message_str.split(" ", 1)[1] if len(event.message_str.split(" ", 1)) > 1 else ""
+        result = await make_guess(group_id, user_name, guess)
+        return result
 
-    async def terminate(self):
-        """插件被卸载/停用时会调用"""
-        pass
+    @filter.command("mg tip")
+    async def tip_cmd(self, event: AstrMessageEvent):
+        group_id = event.get_group_id()
+        result = await get_tip(group_id)
+        return result
+
+    @filter.command("mg rank")
+    async def rank_cmd(self, event: AstrMessageEvent):
+        result = await get_rank()
+        return result
+
+    @filter.command("mg help")
+    async def help_cmd(self, event: AstrMessageEvent):
+        result = await help_info()
+        return result
