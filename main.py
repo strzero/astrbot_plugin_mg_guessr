@@ -1,18 +1,19 @@
 import json
 import hashlib
-import requests
+import aiohttp  # 使用异步的 aiohttp 替代 requests
 from tinydb import TinyDB, Query
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 
 # 数据库文件路径
-db_path = 'songs_db.json'
+db_path = '/AstrBot/data/songs_db.json'
 
-# 从 URL 获取 JSON 数据（同步）
-def fetch_song_data(url):
-    response = requests.get(url)
-    return response.json()
+# 从 URL 获取 JSON 数据（使用 aiohttp 进行异步请求）
+async def fetch_song_data(url):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            return await response.json()
 
 # 计算 JSON 数据的哈希值
 def calculate_hash(data):
@@ -96,18 +97,20 @@ class MyPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
 
-    def initialize(self):
+    async def initialize(self):
         """插件初始化时会自动调用"""
-        url = "https://arcwiki.mcd.blue/index.php?title=Template:Songlist.json&action=raw"
-        # 同步获取曲目信息
-        song_data = fetch_song_data(url)
-        
-        # 存储数据到数据库
-        store_data_in_db(song_data)
-        logger.info("数据初始化并存储成功。")
+        try:
+            url = "https://arcwiki.mcd.blue/index.php?title=Template:Songlist.json&action=raw"
+            # 异步获取曲目信息
+            song_data = await fetch_song_data(url)
+            # 存储数据到数据库
+            store_data_in_db(song_data)
+            logger.info("数据初始化并存储成功。")
+        except Exception as e:
+            logger.error(f"初始化插件时发生错误: {e}")
 
     @filter.command("mg")
-    def helloworld(self, event: AstrMessageEvent):
+    async def helloworld(self, event: AstrMessageEvent):
         """这是一个 hello world 指令"""
         user_name = event.get_sender_name()
         message_str = event.message_str
@@ -115,6 +118,6 @@ class MyPlugin(Star):
         logger.info(message_chain)
         yield event.plain_result(f"Hello, {user_name}, 你发了 {message_str}!")
 
-    def terminate(self):
+    async def terminate(self):
         """插件被卸载/停用时会调用"""
         pass
