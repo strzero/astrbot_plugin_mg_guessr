@@ -14,9 +14,9 @@ def capture_screenshots(title: str):
     """
     # 固定的配置
     url = f'https://arcwiki.mcd.blue/{title}'
-    driver_path = '/opt/wiki-check-bot-docker/data/chrome/chromedriver-linux64/chromedriver'
-    chrome_binary_path = '/opt/wiki-check-bot-docker/data/chrome/chrome-linux64/chrome'
-    save_dir = '/opt/wiki-check-bot-docker/data/image'
+    driver_path = '/AstrBot/data/chrome/chromedriver-linux64/chromedriver'
+    chrome_binary_path = '/AstrBot/data/chrome/chrome-linux64/chrome'
+    save_dir = '/AstrBot/data/image'
 
     # 创建存储截图的目录（如果不存在的话）
     os.makedirs(save_dir, exist_ok=True)
