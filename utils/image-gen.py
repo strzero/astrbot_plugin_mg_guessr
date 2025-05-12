@@ -7,14 +7,14 @@ from selenium.common.exceptions import TimeoutException  # 导入TimeoutExceptio
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # 载入数据库
-db_path = '/opt/wiki-check-bot-docker/data/songs_db.json'
+db_path = '/opt/astrbot/data/songs_db.json'
 db = TinyDB(db_path)
 
 # 获取arc_data表的数据
 arc_data = db.table('arc_data').all()
 
 # 图像保存路径
-image_path = '/opt/wiki-check-bot-docker/data/image'
+image_path = '/opt/astrbot/data/image'
 
 # 定义处理每首歌的函数
 def process_song(item):
