@@ -116,7 +116,7 @@ class GameManager:
             'hints_used': set()
         }
         self._save_game(group_id)
-        return f"{info}游戏开始！请在{max_attempts}次尝试内猜出曲目！\n优先：ID完全匹配＞俗名＞曲名完全匹配＞模糊匹配\n/mg tip：获取提示，/mg guess 曲名：猜测曲目\n" \
+        return f"{info}游戏开始！请在{max_attempts}次尝试内猜出曲目！\nID＞曲名＞俗名，/mg tip：获取提示，/mg guess 曲名：猜测曲目\n" \
 
     def stop_game(self, group_id):
         game = self.games.pop(group_id, None)
@@ -134,9 +134,9 @@ class GameManager:
         if song_name.isdigit():
             guess = self._get_song_by_id(int(song_name))
         if not guess:
-            guess = self._find_song_by_alias(song_name)
-        if not guess:
             guess = self._exact_song_name(song_name)
+        if not guess:
+            guess = self._find_song_by_alias(song_name)
         if not guess:
             candidates = self._fuzzy_search(song_name)
             guess = candidates[0] if candidates else None
